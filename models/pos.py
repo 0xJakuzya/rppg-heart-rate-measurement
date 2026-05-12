@@ -1,33 +1,28 @@
 import math
 import numpy as np
-from src.utils import detrend, bandpass_filter
 from src import config
+from src.utils import bandpass_filter, detrend
 
-def pos(rgb, fs):
-    """
-    Метод POS-Wang для измерения сердечного ритма из видео.
-    Вход: rgb: np.ndarray, fs: float
-    Выход: bvp: np.ndarray
-    """
-    win_sec = 1.6
-    N = rgb.shape[0]
-    H = np.zeros(N)
-    l = math.ceil(win_sec * fs)
-    for n in range(N):
-        m = n - l
-        if m >= 0:
-            segment = rgb[m:n, :]
-            Cn = segment / (np.mean(segment, axis=0) + 1e-9)
-            Cn = Cn.T
-            S = np.array([[0, 1, -1], [-2, 1, 1]], dtype=np.float64) @ Cn
-            std_ratio = np.std(S[0]) / (np.std(S[1]) + 1e-9)
-            h = S[0] + std_ratio * S[1]
-            h -= h.mean()
-            H[m:n] += h
-    H = detrend(H)
-    bvp = bandpass_filter(H, fs, config.CHEBY_LO, config.CHEBY_HI)
+def pos(rgb: np.ndarray, fps: float) -> np.ndarray:
+    """POS-Wang baseline for RGB traces shaped [time, 3]."""
+    n_samples = rgb.shape[0]
+    output = np.zeros(n_samples, dtype=np.float64)
+    window = math.ceil(config.BASELINE_WINDOW_SEC * fps)
+    for end in range(n_samples):
+        start = end - window
+        if start < 0:
+            continue
+        segment = rgb[start:end, :].astype(np.float64)
+        normalized = (segment / (np.mean(segment, axis=0) + config.BASELINE_EPS)).T
+        projected = np.array([[0, 1, -1], [-2, 1, 1]], dtype=np.float64) @ normalized
+        std_ratio = np.std(projected[0]) / (np.std(projected[1]) + config.BASELINE_EPS)
+        pulse = projected[0] + std_ratio * projected[1]
+        pulse -= pulse.mean()
+        output[start:end] += pulse
+    output = detrend(output)
+    bvp = bandpass_filter(output, fps, config.CHEBY_LO, config.CHEBY_HI)
     bvp -= bvp.mean()
-    bvp /= bvp.std() + 1e-9
+    bvp /= bvp.std() + config.BASELINE_EPS
     return bvp.astype(np.float32)
 
 class POS:

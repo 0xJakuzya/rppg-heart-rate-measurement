@@ -1,37 +1,32 @@
 import numpy as np
-from src.utils import detrend, bandpass_filter
 from src import config
+from src.utils import bandpass_filter, detrend
 
-def chrom(rgb: np.ndarray, fs: float) -> np.ndarray:
-    """
-    Метод CHROM для измерения сердечного ритма из видео.
-    Вход: rgb: np.ndarray, fs: float
-    Выход: bvp: np.ndarray
-    """
-    win_sec = 1.6
-    N = rgb.shape[0]
-    l = max(int(win_sec * fs), 2)
-    H = np.zeros(N, dtype=np.float64)
-    for n in range(l, N + 1):
-        segment = rgb[n - l:n, :].astype(np.float64)
-        mu = np.mean(segment, axis=0) + 1e-9
-        Cn = segment / mu
-        Rn, Gn, Bn = Cn[:, 0], Cn[:, 1], Cn[:, 2]
-        Xs = 3 * Rn - 2 * Gn
-        Ys = 1.5 * Rn + Gn - 1.5 * Bn
-        if l >= 9:
-            Xs = bandpass_filter(Xs, fs, config.CHEBY_LO, config.CHEBY_HI)
-            Ys = bandpass_filter(Ys, fs, config.CHEBY_LO, config.CHEBY_HI)
-        alpha = np.std(Xs) / (np.std(Ys) + 1e-9)
-        h = Xs - alpha * Ys
-        h -= h.mean()
-        H[n - l:n] += h
-    H = detrend(H)
-    bvp = bandpass_filter(H, fs, config.CHEBY_LO, config.CHEBY_HI)
+def chrom(rgb: np.ndarray, fps: float) -> np.ndarray:
+    """CHROM baseline for RGB traces shaped [time, 3]."""
+    n_samples = rgb.shape[0]
+    window = max(int(config.BASELINE_WINDOW_SEC * fps), 2)
+    output = np.zeros(n_samples, dtype=np.float64)
+    for end in range(window, n_samples + 1):
+        segment = rgb[end - window : end, :].astype(np.float64)
+        mean_rgb = np.mean(segment, axis=0) + config.BASELINE_EPS
+        normalized = segment / mean_rgb
+        red, green, blue = normalized[:, 0], normalized[:, 1], normalized[:, 2]
+        x_signal = 3 * red - 2 * green
+        y_signal = 1.5 * red + green - 1.5 * blue
+        if window >= 9:
+            x_signal = bandpass_filter(x_signal, fps, config.CHEBY_LO, config.CHEBY_HI)
+            y_signal = bandpass_filter(y_signal, fps, config.CHEBY_LO, config.CHEBY_HI)
+        alpha = np.std(x_signal) / (np.std(y_signal) + config.BASELINE_EPS)
+        pulse = x_signal - alpha * y_signal
+        pulse -= pulse.mean()
+        output[end - window : end] += pulse
+    output = detrend(output)
+    bvp = bandpass_filter(output, fps, config.CHEBY_LO, config.CHEBY_HI)
     bvp -= bvp.mean()
     std = bvp.std()
-    if std < 1e-6:
-        return np.zeros(N, dtype=np.float32)
+    if std < config.EPS:
+        return np.zeros(n_samples, dtype=np.float32)
     bvp /= std
     return bvp.astype(np.float32)
 
